@@ -8,7 +8,7 @@ import {
   acpAgentManager,
   getAgentModels,
   isAcpAuthenticationError,
-} from "./acp-client.js";
+} from "./acp/client.js";
 import type { AcpAgent } from "./acp-registry.js";
 import { getPlatformKey } from "./acp-registry.js";
 
@@ -243,240 +243,188 @@ const startClient = async (): Promise<AcpClient> => {
 };
 
 describe("AcpClient.getModels", () => {
-  test(
-    "reads models from the experimental SessionModelState",
-    async () => {
-      process.env.FAKE_ACP_MODE = "models";
-      const client = await startClient();
-      const models = await client.getModels(process.cwd());
-      await client.stop();
+  test("reads models from the experimental SessionModelState", async () => {
+    process.env.FAKE_ACP_MODE = "models";
+    const client = await startClient();
+    const models = await client.getModels(process.cwd());
+    await client.stop();
 
-      expect(models).toEqual([
-        { modelId: "model-a", name: "Model A", description: "first" },
-        { modelId: "model-b", name: "Model B", description: undefined },
-      ]);
-    },
-    15000,
-  );
+    expect(models).toEqual([
+      { modelId: "model-a", name: "Model A", description: "first" },
+      { modelId: "model-b", name: "Model B" },
+    ]);
+  }, 15000);
 
-  test(
-    "falls back to a configOptions select matched by the model category",
-    async () => {
-      process.env.FAKE_ACP_MODE = "configOptions";
-      const client = await startClient();
-      const models = await client.getModels(process.cwd());
-      await client.stop();
+  test("falls back to a configOptions select matched by the model category", async () => {
+    process.env.FAKE_ACP_MODE = "configOptions";
+    const client = await startClient();
+    const models = await client.getModels(process.cwd());
+    await client.stop();
 
-      expect(models).toEqual([
-        { modelId: "cfg-a", name: "Cfg A", description: undefined },
-        { modelId: "cfg-b", name: "Cfg B", description: "second" },
-      ]);
-    },
-    15000,
-  );
+    expect(models).toEqual([
+      { modelId: "cfg-a", name: "Cfg A" },
+      { modelId: "cfg-b", name: "Cfg B", description: "second" },
+    ]);
+  }, 15000);
 
-  test(
-    "flattens grouped configOptions select options",
-    async () => {
-      process.env.FAKE_ACP_MODE = "configGroups";
-      const client = await startClient();
-      const models = await client.getModels(process.cwd());
-      await client.stop();
+  test("flattens grouped configOptions select options", async () => {
+    process.env.FAKE_ACP_MODE = "configGroups";
+    const client = await startClient();
+    const models = await client.getModels(process.cwd());
+    await client.stop();
 
-      expect(models).toEqual([
-        { modelId: "grouped-a", name: "Grouped A", description: undefined },
-        { modelId: "grouped-b", name: "Grouped B", description: undefined },
-      ]);
-    },
-    15000,
-  );
+    expect(models).toEqual([
+      { modelId: "grouped-a", name: "Grouped A" },
+      { modelId: "grouped-b", name: "Grouped B" },
+    ]);
+  }, 15000);
 
-  test(
-    "returns an empty list when the session exposes no model state",
-    async () => {
-      process.env.FAKE_ACP_MODE = "empty";
-      const client = await startClient();
-      const models = await client.getModels(process.cwd());
-      await client.stop();
+  test("returns an empty list when the session exposes no model state", async () => {
+    process.env.FAKE_ACP_MODE = "empty";
+    const client = await startClient();
+    const models = await client.getModels(process.cwd());
+    await client.stop();
 
-      expect(models).toEqual([]);
-    },
-    15000,
-  );
+    expect(models).toEqual([]);
+  }, 15000);
 });
 
 describe("AcpClient.initialize", () => {
-  test(
-    "sends clientCapabilities + clientInfo so agents can rely on fs read/write",
-    async () => {
-      // The fake agent stores the initialize params and echoes them back on
-      // session/new. We assert the wire shape rather than re-implementing it.
-      process.env.FAKE_ACP_MODE = "echo-initialize";
-      const client = await startClient();
-      const session = await client.createSession(process.cwd(), []);
-      await client.stop();
+  test("sends clientCapabilities + clientInfo so agents can rely on fs read/write", async () => {
+    // The fake agent stores the initialize params and echoes them back on
+    // session/new. We assert the wire shape rather than re-implementing it.
+    process.env.FAKE_ACP_MODE = "echo-initialize";
+    const client = await startClient();
+    const session = await client.createSession(process.cwd(), []);
+    await client.stop();
 
-      const echoed = (session.configOptions as Array<{ initParams: any }>)[0].initParams;
-      expect(echoed).toMatchObject({
-        protocolVersion: 1,
-        clientCapabilities: {
-          fs: { readTextFile: true, writeTextFile: true },
-          terminal: false,
-        },
-        clientInfo: { name: "openducktor" },
-      });
-    },
-    15000,
-  );
+    const echoed = (session.configOptions as Array<{ initParams: unknown }>)[0]?.initParams;
+    expect(echoed).toMatchObject({
+      protocolVersion: 1,
+      clientCapabilities: {
+        fs: { readTextFile: true, writeTextFile: true },
+        terminal: false,
+      },
+      clientInfo: { name: "openducktor" },
+    });
+  }, 15000);
 
-  test(
-    "captures authMethods returned by initialize and exposes them",
-    async () => {
-      process.env.FAKE_ACP_MODE = "auth-methods-on-initialize";
-      const client = new AcpClient(makeFakeAgent());
-      await client.start();
-      const result = await client.initialize();
-      await client.stop();
+  test("captures authMethods returned by initialize and exposes them", async () => {
+    process.env.FAKE_ACP_MODE = "auth-methods-on-initialize";
+    const client = new AcpClient(makeFakeAgent());
+    await client.start();
+    const result = await client.initialize();
+    await client.stop();
 
-      expect(result.authMethods).toEqual([
-        { id: "oauth", name: "Sign in with OAuth", description: "browser flow" },
-        { id: "api-key" },
-      ]);
-      // Methods without an `id` are filtered out (we sent a clean fixture, but
-      // the getter copy is what callers actually consume).
-      expect(client.getAuthMethods()).toEqual(result.authMethods);
-    },
-    15000,
-  );
+    expect(result.authMethods).toEqual([
+      { id: "oauth", name: "Sign in with OAuth", description: "browser flow" },
+      { id: "api-key" },
+    ]);
+    // Methods without an `id` are filtered out (we sent a clean fixture, but
+    // the getter copy is what callers actually consume).
+    expect(client.getAuthMethods()).toEqual(result.authMethods);
+  }, 15000);
 });
 
 describe("AcpClient agent->client requests", () => {
-  test(
-    "answers fs/read_text_file so the agent receives file contents",
-    async () => {
-      process.env.FAKE_ACP_MODE = "agent-read-file";
-      const target = join(tempDir, "fs-read-fixture.txt");
-      writeFileSync(target, "hello from disk");
-      process.env.FAKE_ACP_ECHO_PATH = target;
+  test("answers fs/read_text_file so the agent receives file contents", async () => {
+    process.env.FAKE_ACP_MODE = "agent-read-file";
+    const target = join(tempDir, "fs-read-fixture.txt");
+    writeFileSync(target, "hello from disk");
+    process.env.FAKE_ACP_ECHO_PATH = target;
 
-      const client = await startClient();
-      const models = await client.getModels(process.cwd());
-      await client.stop();
+    const client = await startClient();
+    const models = await client.getModels(process.cwd());
+    await client.stop();
 
-      // The agent echoes file contents back as the model description.
-      expect(models[0]?.description).toBe("hello from disk");
-    },
-    15000,
-  );
+    // The agent echoes file contents back as the model description.
+    expect(models[0]?.description).toBe("hello from disk");
+  }, 15000);
 
-  test(
-    "auto-cancels session/request_permission instead of silently allowing",
-    async () => {
-      process.env.FAKE_ACP_MODE = "agent-request-permission";
-      const client = await startClient();
-      const models = await client.getModels(process.cwd());
-      await client.stop();
+  test("auto-cancels session/request_permission instead of silently allowing", async () => {
+    process.env.FAKE_ACP_MODE = "agent-request-permission";
+    const client = await startClient();
+    const models = await client.getModels(process.cwd());
+    await client.stop();
 
-      // The agent echoes the permission response into the model description.
-      const parsed = JSON.parse(models[0]?.description ?? "{}");
-      expect(parsed).toEqual({ outcome: { outcome: "cancelled" } });
-    },
-    15000,
-  );
+    // The agent echoes the permission response into the model description.
+    const parsed = JSON.parse(models[0]?.description ?? "{}");
+    expect(parsed).toEqual({ outcome: { outcome: "cancelled" } });
+  }, 15000);
 
-  test(
-    "responds with JSON-RPC -32601 for unknown agent->client methods",
-    async () => {
-      process.env.FAKE_ACP_MODE = "agent-unknown-method";
-      const client = await startClient();
-      const models = await client.getModels(process.cwd());
-      await client.stop();
+  test("responds with JSON-RPC -32601 for unknown agent->client methods", async () => {
+    process.env.FAKE_ACP_MODE = "agent-unknown-method";
+    const client = await startClient();
+    const models = await client.getModels(process.cwd());
+    await client.stop();
 
-      expect(models[0]?.name).toBe("code:-32601");
-      expect(models[0]?.description).toContain("totally/made_up");
-    },
-    15000,
-  );
+    expect(models[0]?.name).toBe("code:-32601");
+    expect(models[0]?.description).toContain("totally/made_up");
+  }, 15000);
 });
 
 describe("AcpClient authentication handling", () => {
-  test(
-    "throws AcpAuthenticationError and stops the process when session/new requires auth",
-    async () => {
-      process.env.FAKE_ACP_MODE = "auth";
-      const client = await startClient();
+  test("throws AcpAuthenticationError and stops the process when session/new requires auth", async () => {
+    process.env.FAKE_ACP_MODE = "auth";
+    const client = await startClient();
 
-      let caught: unknown;
-      try {
-        await client.getModels(process.cwd());
-      } catch (error) {
-        caught = error;
-      }
+    let caught: unknown;
+    try {
+      await client.getModels(process.cwd());
+    } catch (error) {
+      caught = error;
+    }
 
-      expect(isAcpAuthenticationError(caught)).toBe(true);
-      expect(caught).toBeInstanceOf(AcpAuthenticationError);
-      expect((caught as AcpAuthenticationError).message).toContain("Authentication required");
-      // The spawned process must not outlive the failed request.
-      expect(client.isRunning()).toBe(false);
-    },
-    15000,
-  );
+    expect(isAcpAuthenticationError(caught)).toBe(true);
+    expect(caught).toBeInstanceOf(AcpAuthenticationError);
+    expect((caught as AcpAuthenticationError).message).toContain("Authentication required");
+    // The spawned process must not outlive the failed request.
+    expect(client.isRunning()).toBe(false);
+  }, 15000);
 
-  test(
-    "getOrCreateClient kills the process when the initialize handshake requires auth",
-    async () => {
-      process.env.FAKE_ACP_MODE = "auth-on-initialize";
-      const agent = makeFakeAgent();
+  test("getOrCreateClient kills the process when the initialize handshake requires auth", async () => {
+    process.env.FAKE_ACP_MODE = "auth-on-initialize";
+    const agent = makeFakeAgent();
 
-      let caught: unknown;
-      try {
-        await acpAgentManager.getOrCreateClient(agent);
-      } catch (error) {
-        caught = error;
-      }
+    let caught: unknown;
+    try {
+      await acpAgentManager.getOrCreateClient(agent);
+    } catch (error) {
+      caught = error;
+    }
 
-      expect(isAcpAuthenticationError(caught)).toBe(true);
-      // A failed handshake must not leave a cached client behind.
-      await acpAgentManager.stopAgent(agent.id);
-    },
-    15000,
-  );
+    expect(isAcpAuthenticationError(caught)).toBe(true);
+    // A failed handshake must not leave a cached client behind.
+    await acpAgentManager.stopAgent(agent.id);
+  }, 15000);
 });
 
 describe("AcpClient process lifecycle", () => {
-  test(
-    "isRunning() reports false after the agent process exits",
-    async () => {
-      process.env.FAKE_ACP_MODE = "models";
-      const client = await startClient();
-      expect(client.isRunning()).toBe(true);
+  test("isRunning() reports false after the agent process exits", async () => {
+    process.env.FAKE_ACP_MODE = "models";
+    const client = await startClient();
+    expect(client.isRunning()).toBe(true);
 
-      await client.stop();
-      expect(client.isRunning()).toBe(false);
-    },
-    15000,
-  );
+    await client.stop();
+    expect(client.isRunning()).toBe(false);
+  }, 15000);
 
-  test(
-    "getOrCreateClient coalesces concurrent startup calls onto one process",
-    async () => {
-      process.env.FAKE_ACP_MODE = "models";
-      const agent = makeFakeAgent();
+  test("getOrCreateClient coalesces concurrent startup calls onto one process", async () => {
+    process.env.FAKE_ACP_MODE = "models";
+    const agent = makeFakeAgent();
 
-      const [a, b, c] = await Promise.all([
-        acpAgentManager.getOrCreateClient(agent),
-        acpAgentManager.getOrCreateClient(agent),
-        acpAgentManager.getOrCreateClient(agent),
-      ]);
+    const [a, b, c] = await Promise.all([
+      acpAgentManager.getOrCreateClient(agent),
+      acpAgentManager.getOrCreateClient(agent),
+      acpAgentManager.getOrCreateClient(agent),
+    ]);
 
-      // Same client instance for every concurrent caller (no double-spawn).
-      expect(a).toBe(b);
-      expect(b).toBe(c);
+    // Same client instance for every concurrent caller (no double-spawn).
+    expect(a).toBe(b);
+    expect(b).toBe(c);
 
-      await acpAgentManager.stopAgent(agent.id);
-    },
-    15000,
-  );
+    await acpAgentManager.stopAgent(agent.id);
+  }, 15000);
 });
 
 // Opt-in integration coverage against the real ACP registry + agents.

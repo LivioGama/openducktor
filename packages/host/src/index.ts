@@ -1,4 +1,5 @@
 export { Effect } from "effect";
+export * from "./acp";
 export { createLocalAttachmentAdapter } from "./adapters/attachments/local-attachment-adapter";
 export {
   type ArtifactMcpLauncher,

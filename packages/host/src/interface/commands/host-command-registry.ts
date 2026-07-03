@@ -1,6 +1,11 @@
 import { HostValidationError } from "../../effect/host-errors";
 
 export const HOST_COMMAND_NAMES = [
+  "acp_authenticate",
+  "acp_get_models",
+  "acp_list_agents",
+  "acp_start_session",
+  "acp_stop_agent",
   "agent_session_stop",
   "agent_session_upsert",
   "agent_sessions_list",

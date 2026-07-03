@@ -1,5 +1,16 @@
 # AGENTS.md
 
+## Repository Map
+
+A full codemap is available at `codemap.md` in the project root.
+
+Before working on any task, read `codemap.md` to understand:
+- Project architecture and entry points
+- Directory responsibilities and design patterns
+- Data flow and integration points between modules
+
+For deep work on a specific folder, also read that folder's `codemap.md`.
+
 ## Critical Notice — No Fallbacks
 
 - NEVER implement fallback logic to mask failures.
@@ -13,34 +24,21 @@
 - AVOID "normalization" unless it's absolutely necessary
 - NEVER harden code without a good reason
 
-## Critical Notice — Runtime Source Evidence
-
-- When behavior depends on external runtime internals, inspect the runtime source or official contract before designing or changing adapters.
-- Never infer runtime behavior from memory, adapter shape, or assumptions when source evidence is available.
-
-## Critical Notice — Human Validation for Database Schema
-
-- NEVER change database schemas, migration files, persisted record schemas, or durable SQLite/task-store record shapes without explicit human validation.
-- If a fix appears to require persisting new data or changing durable storage shape, stop and ask for approval first.
-
 ## Project
 
-OpenDucktor is a **Bun monorepo** for a macOS-first **Electron** desktop app and local browser runner that orchestrate AI planning/building workflows with a workspace-scoped **SQLite task store** as task source-of-truth.
+OpenDucktor is a **Bun monorepo** for a macOS-first **Tauri v2** desktop app that orchestrates AI planning/building workflows with **Beads** as task source-of-truth.
 
 Package manager: **Bun** (not npm/yarn). All workspace commands use `bun run`.
 
 ### Monorepo Map
 
-- `apps/electron`: Electron desktop shell, renderer bootstrap, preload bridge, packaging, and IPC transport.
-- `packages/frontend`: Shared React + Vite UI.
+- `apps/desktop`: React + Vite UI and Tauri host integration.
+- `apps/desktop/src-tauri`: Rust host application and infra crates.
 - `packages/contracts`: Shared runtime schemas and IPC contracts (TS).
 - `packages/core`: Core domain services and ports.
-- `packages/host`: Effect-native TypeScript host for Electron/web transports, command routing, application use cases, and infrastructure adapters.
 - `packages/adapters-opencode-sdk`: `AgentEnginePort` adapter.
-- `packages/host-client`: Frontend IPC adapter.
+- `packages/adapters-tauri-host`: Frontend IPC adapter.
 - `packages/openducktor-mcp`: MCP server exposing `odt_*` workflow tools.
-
-When adding a new workspace app/package under `apps/*` or `packages/*`, update `.serena/project.yml` `additional_workspace_folders` and run `serena project health-check .` so Serena keeps monorepo cross-package references working.
 
 ## Architecture
 
@@ -50,31 +48,20 @@ When adding a new workspace app/package under `apps/*` or `packages/*`, update `
 - Do not couple UI code directly to infra when contracts exist.
 - When changing data contracts, update `packages/contracts` first, then adapt host/frontend.
 
-### Effect adoption rules
-
-- `packages/host` is Effect-native internally. Fallible or I/O-producing host ports and application services should return `Effect.Effect<Success, Failure, Requirements>`, not raw `Promise`.
-- Keep Promise interop at explicit transport boundaries only: Electron IPC, browser HTTP/SSE, shell bridge adapters, and external package APIs that must remain Promise-compatible.
-- Expected host failures should use typed errors, preferably `Data.TaggedError`, and be propagated through the Effect error channel. Do not use generic `throw new Error(...)` for expected host failures.
-- Use `Effect.gen` for readable sequencing, `Context.Tag`/`Layer` for host dependency wiring when it clarifies composition, and `Effect.try`/`Effect.tryPromise` only to wrap synchronous or Promise-based external APIs at the boundary.
-- Do not use `catchAll`, retry, fallback, or defaulting to hide broken contracts. Retrying/polling must represent explicit product behavior and should use Effect scheduling primitives.
-- Pure domain policy code may stay synchronous when it has no I/O and no useful typed failure channel. Effect is the host execution model, not a mandate to wrap every expression.
-- `packages/contracts` remains the public Zod contract source until a separate schema ADR changes that. Do not duplicate public schemas in Effect Schema as a second source of truth.
-- TanStack Query remains the frontend cache/deduplication layer for server-owned reads. Effect may run behind host clients or query functions, but it must not introduce a competing frontend cache or request store.
-
 ### Replaceable boundaries
 
 - TS port: `AgentEnginePort` in `packages/core/src/ports/agent-engine.ts`
+- Rust trait: `TaskStore` defined in `apps/desktop/src-tauri/crates/host-domain/src/store.rs` and re-exported by `apps/desktop/src-tauri/crates/host-domain/src/lib.rs`
 
 ### Runtime abstraction rules
 
 - Treat runtime definitions, runtime routes, and runtime connections as different layers.
-- Shared host-visible runtime/run payloads live in `packages/contracts/src/run-schemas.ts`.
+- Shared host-visible runtime/run payloads live in `packages/contracts/src/run-schemas.ts`; update Rust host types in `apps/desktop/src-tauri/crates/host-domain/src/runtime.rs` in the same change.
 - `RuntimeInstanceSummary` is live runtime-instance metadata only: keep `kind`, `runtimeId`, `repoPath`, nullable `taskId`, `role`, `workingDirectory`, `runtimeRoute`, `startedAt`, and `descriptor`. Do not reintroduce top-level `endpoint`, `port`, or duplicate `capabilities` fields there.
-- Keep `runtimeId` and `runtimeRoute` at runtime-registry/adapter depth. UI and orchestration should carry `runtimeKind`, repository path, working directory, and session id.
 - Request-scoped agent engine operations use `runtimeConnection` objects, not raw shared `runtimeEndpoint` strings. Build adapter-local client inputs from the connection at the adapter boundary.
-- Persisted session records/documents must not store live runtime route data (`runtimeEndpoint`, `baseUrl`, `runtimeTransport`). Persist durable identifiers plus `workingDirectory`, then resolve a live route only at the adapter call boundary.
+- Persisted session records/documents must not store live runtime route data (`runtimeEndpoint`, `baseUrl`, `runtimeTransport`). Persist durable identifiers plus `workingDirectory`, then resolve a live route during hydration.
 - Keep runtime routing fail-fast. Never fall back from a session/build runtime to the repo default runtime when loading session history, todos, diff, or file status.
-- Keep runtime capability definitions in runtime descriptors (`packages/contracts/src/agent-runtime-schemas.ts`). Do not duplicate capability booleans onto runtime-instance summaries.
+- Keep runtime capability definitions in runtime descriptors (`packages/contracts/src/agent-runtime-schemas.ts` and Rust descriptor equivalents). Do not duplicate capability booleans onto runtime-instance summaries.
 
 ## Commands
 
@@ -83,23 +70,39 @@ Run from repo root unless stated otherwise:
 ```sh
 bun install                  # install deps
 bun run dev                  # frontend dev server
-bun run electron:dev         # Electron desktop dev server
-bun run browser:dev          # local browser runner
+bun run tauri:dev            # desktop app dev (Tauri)
 bun run typecheck            # typecheck all workspaces
 bun run lint                 # lint all workspaces
 bun run test                 # test all workspaces
 bun run build                # build all workspaces
 ```
 
+Rust host: `cd apps/desktop/src-tauri && cargo check` / `cargo test`
+
+Prefer the root Bun wrappers for routine Rust verification when they exist:
+
+```sh
+bun run check:rust          # cargo check for the Tauri workspace
+bun run test:rust           # cargo test for the Tauri workspace
+```
+
+Use raw `cargo` commands directly for checks that do not yet have Bun wrappers, such as:
+
+```sh
+cd apps/desktop/src-tauri && cargo fmt --all --check
+cd apps/desktop/src-tauri && cargo clippy --workspace --all-targets -- -D warnings
+```
+
 Package-level targets for focused iteration:
 
 ```sh
 bun run --filter @openducktor/core test
-bun run --filter @openducktor/electron test
-bun run --filter @openducktor/electron typecheck
-bun run --filter @openducktor/electron lint
-bun run --filter @openducktor/frontend test
-bun run --filter @openducktor/host test
+bun run --filter @openducktor/desktop test
+bun run --filter @openducktor/desktop typecheck
+bun run --filter @openducktor/desktop lint
+cd apps/desktop/src-tauri && cargo test -p host-domain
+cd apps/desktop/src-tauri && cargo test -p host-infra-beads
+cd apps/desktop/src-tauri && cargo test -p host-application
 ```
 
 ## Styling & Theming (Critical)
@@ -108,7 +111,7 @@ The app uses **Shadcn semantic tokens** with **Tailwind CSS v4**. A dark theme e
 
 ### Token system
 
-Tokens are CSS custom properties in `packages/frontend/src/styles.css` (`:root` light, `.dark` dark) mapped to Tailwind via `@theme inline`. **Always use semantic tokens:**
+Tokens are CSS custom properties in `apps/desktop/src/styles.css` (`:root` light, `.dark` dark) mapped to Tailwind via `@theme inline`. **Always use semantic tokens:**
 
 | Purpose | Use | Never use |
 |---|---|---|
@@ -137,14 +140,14 @@ Prefer light shades for backgrounds (`bg-sky-50`) and dark for text (`text-sky-7
 2. NEVER use gradient backgrounds (`bg-gradient-*`) for surfaces/components.
 3. Use `className` props and semantic tokens at usage sites — never override base shadcn component files with hardcoded colors.
 4. Every new UI element must work in both light and dark themes.
-5. Use shadcn components from `packages/frontend/src/components/ui`. Avoid native browser-styled controls when a project component exists.
+5. Use shadcn components from `apps/desktop/src/components/ui`. Avoid native browser-styled controls when a project component exists.
 
 ## Frontend Patterns
 
-- State management contexts are wired in `packages/frontend/src/state/app-state-provider.tsx`.
-- Domain operations live in focused hooks under `packages/frontend/src/state/{lifecycle,operations,tasks}`.
+- State management contexts are wired in `apps/desktop/src/state/app-state-provider.tsx`.
+- Domain operations live in focused hooks under `apps/desktop/src/state/{lifecycle,operations,tasks}`.
 - Use operation-specific loading flags (`isLoadingTasks`, `isLoadingChecks`), not generic busy flags.
-- Centralize shared types under `packages/frontend/src/types`; use feature-level `constants.ts` over magic strings.
+- Centralize shared types under `apps/desktop/src/types`; use feature-level `constants.ts` over magic strings.
 - For async form submissions: disable the full form scope, show in-button loading, and preserve pending/error/success feedback.
 - Avoid nested ternaries in app and test code. Prefer named booleans, helper functions, lookup maps, or explicit `if`/`else` control flow so state rules stay readable.
 
@@ -153,7 +156,7 @@ Prefer light shades for backgrounds (`bg-sky-50`) and dark for text (`text-sky-7
 - TanStack Query is the default cache and deduplication layer for frontend reads that come from the backend or host adapters.
 - MUST use TanStack Query for server-owned read data that can be requested from multiple places, reused across screens, refreshed, invalidated after mutations, or deduplicated in flight.
 - MUST use TanStack Query for stable host reads such as settings snapshots, repo config, runtime definitions, tasks/runs lists, branches/current branch, diagnostics, session lists, and git status snapshots unless there is a documented exception.
-- MUST define query keys and query option builders in focused modules under `packages/frontend/src/state/queries`.
+- MUST define query keys and query option builders in focused modules under `apps/desktop/src/state/queries`.
 - MUST use `useQuery` / `useQueries` / `useSuspenseQuery` in React render paths that read backend-owned data.
 - MUST use `queryClient.fetchQuery`, `ensureQueryData`, `prefetchQuery`, or cache invalidation APIs for imperative backend reads outside render paths.
 - MUST invalidate or update the relevant TanStack Query cache entries after any mutation that changes cached server data.
@@ -163,24 +166,25 @@ Prefer light shades for backgrounds (`bg-sky-50`) and dark for text (`text-sky-7
 - MUST NOT move live streaming agent transcript state, in-progress tool output, pending permission/question interactions, or other event-driven session state into TanStack Query unless the underlying data becomes request/response based.
 - When adapting existing provider APIs, it is acceptable to keep the provider contract stable while making the underlying read path use TanStack Query.
 
-## Backend / Host
+## Backend / Tauri
 
-- Keep host command APIs typed and schema-validated.
-- Expected host failures should be actionable typed errors.
+- Register every Tauri command in `tauri::generate_handler!`.
+- Keep command APIs typed; return `Result<_, _>` with actionable errors.
+- Respect capability permissions in `apps/desktop/src-tauri/capabilities`.
 - Keep blocking work off the UI thread.
 - Do not re-run expensive repo initialization when cached readiness is known.
 
-## SQLite Task Store & Task Model
+## Beads & Task Model
 
-- The SQLite task store is the sole source of truth for tasks in V1.
-- Lifecycle state is task `status` (not labels/phases).
-- Task-store records must store durable task/workflow state only. Do not persist transient runtime or session interaction state there.
-- Never serialize pending permissions, pending questions, live runtime routes, in-progress transcripts, tool streaming state, or other recoverable live-only values into task-store records. Rehydrate those from the live runtime, event stream, or runtime-owned history instead.
+- Beads is the sole source of truth for tasks in V1.
+- Lifecycle state is Beads `status` (not labels/phases).
+- Beads metadata must store durable task/workflow state only. Do not persist transient runtime or session interaction state there.
+- Never serialize pending permissions, pending questions, live runtime routes, in-progress transcripts, tool streaming state, or other recoverable live-only values into Beads metadata/models. Rehydrate those from the live runtime, event stream, or runtime-owned history instead.
 - Canonical statuses:
-  - built-in: `open`, `in_progress`, `blocked`, `closed`
+  - built-in: `open`, `in_progress`, `blocked`, `deferred`, `closed`
   - custom: `spec_ready`, `ready_for_dev`, `ai_review`, `human_review`
-- UI label mapping: `open` → Backlog, `closed` → Done.
-- Agent-authored docs are task documents: `spec`, `implementationPlan`, `qaReports` (UI surfaces latest entries).
+- UI label mapping: `open` → Backlog, `closed` → Done, `deferred` → hidden from Kanban.
+- Agent-authored docs are metadata under `openducktor` namespace: `documents.spec`, `documents.implementationPlan`, `documents.qaReports` (latest-only).
 - Task actions defined in `packages/contracts/src/task-schemas.ts` (`taskActionSchema`).
 - Detailed workflow docs: `docs/task-workflow-*.md`
 
@@ -194,17 +198,16 @@ Keep this contract stable. If you change any item below, update all related laye
 - Role-to-tool policy: `packages/core/src/types/agent-orchestrator.ts` (`AGENT_ROLE_TOOL_POLICY`).
 - Role allowlist: `spec` → `odt_read_task, odt_set_spec`; `planner` → `odt_read_task, odt_set_plan`; `build` → `odt_read_task, odt_build_*`; `qa` → `odt_read_task, odt_qa_*`.
 - Workflow tool normalization: `packages/core/src/services/odt-workflow-tools.ts`.
-- Agent Studio root: `packages/frontend/src/pages/agents/agents-page.tsx`; orchestration in `use-agent-studio-*.ts` hooks.
-- Runtime/session orchestration: `packages/frontend/src/state/operations/use-agent-orchestrator-operations.ts`.
+- Agent Studio root: `apps/desktop/src/pages/agents-page.tsx`; orchestration in `use-agent-studio-*.ts` hooks.
+- Runtime/session orchestration: `apps/desktop/src/state/operations/use-agent-orchestrator-operations.ts`.
 - Read-only roles (`spec`, `planner`, `qa`) must keep mutating permission auto-rejection.
 - Do not rename `odt_*` tools or change role allowlists in a single layer — update MCP, core, adapter, and frontend together.
 
 ## Testing
 
-- All non-frontend code must be deeply tested (`packages/host`, `packages/core`, adapters, MCP).
+- All non-frontend code must be deeply tested (Rust crates, `packages/core`, adapters, MCP).
 - Frontend tests are required for touched behavior.
 - Always run relevant checks before finishing — see Commands section above.
-- NEVER change production APIs, constructors, options, or exported types only to make tests easier or faster. Test-only seams must come from narrower test helpers, local fakes around existing boundaries, or refactoring that improves production design on its own merits.
 - In Bun tests, NEVER mock shared re-export barrels such as `@/state`, `@/components`, or other `index.ts` aggregator modules. Mock the source module that owns the export instead (for example `@/state/app-state-provider`), otherwise Bun can bind an incomplete export surface and leak that mock across files.
 - In Bun tests, register `mock.module(...)` in scoped setup (`beforeAll`/`beforeEach`) only when you truly need a module seam. Prefer dependency injection, direct function parameters, or `spyOn`-style seams over module replacement whenever possible.
 - In Bun tests, NEVER keep `mock.module(...)` active for the lifetime of a whole file via `beforeAll`/`afterAll`. Bun can interleave files in one process, so file-lifetime module mocks can leak into unrelated suites. Prefer no module mock at all; if unavoidable, scope it to the smallest possible test surface and restore it immediately after that scope.
@@ -238,3 +241,87 @@ Keep this contract stable. If you change any item below, update all related laye
 
 - Use Conventional Commits.
 - Verify touched areas with relevant checks before finishing.
+
+<!-- code-review-graph MCP tools -->
+## MCP Tools: code-review-graph
+
+**IMPORTANT: This project has a knowledge graph. ALWAYS use the
+code-review-graph MCP tools BEFORE using Grep/Glob/Read to explore
+the codebase.** The graph is faster, cheaper (fewer tokens), and gives
+you structural context (callers, dependents, test coverage) that file
+scanning cannot.
+
+### When to use graph tools FIRST
+
+- **Exploring code**: `semantic_search_nodes` or `query_graph` instead of Grep
+- **Understanding impact**: `get_impact_radius` instead of manually tracing imports
+- **Code review**: `detect_changes` + `get_review_context` instead of reading entire files
+- **Finding relationships**: `query_graph` with callers_of/callees_of/imports_of/tests_for
+- **Architecture questions**: `get_architecture_overview` + `list_communities`
+
+Fall back to Grep/Glob/Read **only** when the graph doesn't cover what you need.
+
+### Key Tools
+
+| Tool | Use when |
+|------|----------|
+| `detect_changes` | Reviewing code changes — gives risk-scored analysis |
+| `get_review_context` | Need source snippets for review — token-efficient |
+| `get_impact_radius` | Understanding blast radius of a change |
+| `get_affected_flows` | Finding which execution paths are impacted |
+| `query_graph` | Tracing callers, callees, imports, tests, dependencies |
+| `semantic_search_nodes` | Finding functions/classes by name or keyword |
+| `get_architecture_overview` | Understanding high-level codebase structure |
+| `refactor_tool` | Planning renames, finding dead code |
+
+### Workflow
+
+1. The graph auto-updates on file changes (via hooks).
+2. Use `detect_changes` for code review.
+3. Use `get_affected_flows` to understand impact.
+4. Use `query_graph` pattern="tests_for" to check coverage.
+
+<!-- gitnexus:start -->
+# GitNexus — Code Intelligence
+
+This project is indexed by GitNexus as **openducktor** (26313 symbols, 62425 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+
+> Index stale? Run `node .gitnexus/run.cjs analyze` from the project root — it auto-selects an available runner. No `.gitnexus/run.cjs` yet? `npx gitnexus analyze` (npm 11 crash → `npm i -g gitnexus`; #1939).
+
+## Always Do
+
+- **MUST run impact analysis before editing any symbol.** Before modifying a function, class, or method, run `impact({target: "symbolName", direction: "upstream"})` and report the blast radius (direct callers, affected processes, risk level) to the user.
+- **MUST run `detect_changes()` before committing** to verify your changes only affect expected symbols and execution flows. For regression review, compare against the default branch: `detect_changes({scope: "compare", base_ref: "main"})`.
+- **MUST warn the user** if impact analysis returns HIGH or CRITICAL risk before proceeding with edits.
+- When exploring unfamiliar code, use `query({search_query: "concept"})` to find execution flows instead of grepping. It returns process-grouped results ranked by relevance.
+- When you need full context on a specific symbol — callers, callees, which execution flows it participates in — use `context({name: "symbolName"})`.
+- For security review, `explain({target: "fileOrSymbol"})` lists taint findings (source→sink flows; needs `analyze --pdg`).
+
+## Never Do
+
+- NEVER edit a function, class, or method without first running `impact` on it.
+- NEVER ignore HIGH or CRITICAL risk warnings from impact analysis.
+- NEVER rename symbols with find-and-replace — use `rename` which understands the call graph.
+- NEVER commit changes without running `detect_changes()` to check affected scope.
+
+## Resources
+
+| Resource | Use for |
+|----------|---------|
+| `gitnexus://repo/openducktor/context` | Codebase overview, check index freshness |
+| `gitnexus://repo/openducktor/clusters` | All functional areas |
+| `gitnexus://repo/openducktor/processes` | All execution flows |
+| `gitnexus://repo/openducktor/process/{name}` | Step-by-step execution trace |
+
+## CLI
+
+| Task | Read this skill file |
+|------|---------------------|
+| Understand architecture / "How does X work?" | `.claude/skills/gitnexus/gitnexus-exploring/SKILL.md` |
+| Blast radius / "What breaks if I change X?" | `.claude/skills/gitnexus/gitnexus-impact-analysis/SKILL.md` |
+| Trace bugs / "Why is X failing?" | `.claude/skills/gitnexus/gitnexus-debugging/SKILL.md` |
+| Rename / extract / split / refactor | `.claude/skills/gitnexus/gitnexus-refactoring/SKILL.md` |
+| Tools, resources, schema reference | `.claude/skills/gitnexus/gitnexus-guide/SKILL.md` |
+| Index, status, clean, wiki CLI commands | `.claude/skills/gitnexus/gitnexus-cli/SKILL.md` |
+
+<!-- gitnexus:end -->

@@ -9,6 +9,7 @@ import { createOpenCodeWorkspaceRuntimeStarter } from "../../adapters/opencode/o
 import { createRuntimeRegistry } from "../../adapters/runtimes/runtime-registry";
 import { createRuntimeTaskActivityGuard } from "../../adapters/runtimes/runtime-task-activity-guard";
 import { createSqliteTaskRepository } from "../../adapters/sqlite/sqlite-task-repository";
+import { createAcpCommandHandlers } from "../../application/acp/command-handlers";
 import { createLocalAttachmentService } from "../../application/attachments/local-attachment-service";
 import { createDevServerService } from "../../application/dev-servers/dev-server-service";
 import { createSystemDiagnosticsService } from "../../application/diagnostics/system-diagnostics-service";
@@ -300,6 +301,7 @@ export const createNodeEffectHostCommandRouter = (
         lifecycleLogger.info("OpenDucktor host services stopped");
       }),
     handlers: {
+      ...createAcpCommandHandlers(),
       ...createDevServerCommandHandlers(devServerService),
       ...createCodexAppServerCommandHandlers(codexAppServerService),
       ...createFilesystemCommandHandlers(filesystemService),

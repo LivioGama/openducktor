@@ -53,11 +53,11 @@ function saveRegistryToCache(registry: ACPRegistry): void {
   }
 }
 
-// Most ACP runtime kinds use the agent's registry id verbatim. The three
-// deeply integrated runtimes keep their established OpenDucktor names, so they
-// need an explicit mapping to the ACP registry agent id.
+// Most ACP runtime kinds use the agent's registry id verbatim. Codex keeps its
+// established OpenDucktor name, so it needs an explicit mapping to the ACP
+// registry agent id. Claude is not an ACP runtime kind (it runs through the
+// Claude Agent SDK, see ADR-0004/0007) and is intentionally absent here.
 const RUNTIME_TO_AGENT_ID_OVERRIDES: Partial<Record<RuntimeKind, string>> = {
-  "claude-code": "claude-acp",
   codex: "codex-acp",
 };
 
